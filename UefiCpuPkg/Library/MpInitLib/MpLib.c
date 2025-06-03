@@ -2253,6 +2253,7 @@ MpInitLibInitialize (
   // EfiBootServicesCode to avoid page fault if NX memory protection is enabled.
   //
   CpuMpData->WakeupBufferHigh = AllocateCodeBuffer (ApResetVectorSizeAbove1Mb);
+  RemoveNxProtection ((EFI_PHYSICAL_ADDRESS)(UINTN)CpuMpData->WakeupBufferHigh, ALIGN_VALUE (ApResetVectorSizeAbove1Mb, EFI_PAGE_SIZE));
   CopyMem (
     (VOID *)CpuMpData->WakeupBufferHigh,
     CpuMpData->AddressMap.RendezvousFunnelAddress +
@@ -2262,6 +2263,7 @@ MpInitLibInitialize (
   DEBUG ((DEBUG_INFO, "AP Vector: non-16-bit = %p/%x\n", CpuMpData->WakeupBufferHigh, ApResetVectorSizeAbove1Mb));
 
   ApplyReadOnlyMemoryProtection ((EFI_PHYSICAL_ADDRESS)(UINTN)CpuMpData->WakeupBufferHigh, ALIGN_VALUE (ApResetVectorSizeAbove1Mb, EFI_PAGE_SIZE));
+
   //
   // Save APIC mode for AP to sync
   //
