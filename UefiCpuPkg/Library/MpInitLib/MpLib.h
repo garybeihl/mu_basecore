@@ -527,7 +527,7 @@ GetNextMpHandOffHob (
   @retval 0       Cannot find free memory below 4GB.
 **/
 UINTN
-AllocateCodeBuffer (
+AllocateCodePage (
   IN UINTN  BufferSize
   );
 
@@ -1001,7 +1001,7 @@ Add ReadOnly protection to the range specified by BaseAddress and Length.
 @param[in] Length       Length of the range.
 **/
 VOID
-ApplyReadOnlyMemoryProtection (
+ApplyRoProtection (
   IN EFI_PHYSICAL_ADDRESS  BaseAddress,
   IN UINTN                 Length
   );

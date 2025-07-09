@@ -39,12 +39,14 @@ CPU_MP_DEBUG_PROTOCOL  mCpuMpDebugProtocol = {
 
 #define  AP_SAFE_STACK_SIZE  128
 
-CPU_MP_DATA                    *mCpuMpData                  = NULL;
-EFI_EVENT                      mCheckAllApsEvent            = NULL;
-EFI_EVENT                      mMpInitExitBootServicesEvent = NULL;
-EFI_EVENT                      mLegacyBootEvent             = NULL;
-volatile BOOLEAN               mStopCheckAllApsStatus       = TRUE;
+CPU_MP_DATA       *mCpuMpData                  = NULL;
+EFI_EVENT         mCheckAllApsEvent            = NULL;
+EFI_EVENT         mMpInitExitBootServicesEvent = NULL;
+EFI_EVENT         mLegacyBootEvent             = NULL;
+volatile BOOLEAN  mStopCheckAllApsStatus       = TRUE;
+// MU_CHANGE START: Enable removal of NX attribute from buffer
 extern RELOCATE_AP_LOOP_ENTRY  mReservedApLoop;
+// MU_CHANGE END: Enable removal of NX attribute from buffer
 
 //
 // Begin wakeup buffer allocation below 0x88000
@@ -240,7 +242,7 @@ GetWakeupBuffer (
   @retval 0       Cannot find free memory below 4GB.
 **/
 UINTN
-AllocateCodeBuffer (
+AllocateCodePage (
   IN UINTN  BufferSize
   )
 {
@@ -519,13 +521,13 @@ RemoveNxProtection (
                       );
 
       if (EFI_ERROR (Status)) {
-        DEBUG ((DEBUG_ERROR, "%a - Setting Ro on 0x%p returned %r\n", __func__, BaseAddress, Status));
+        DEBUG ((DEBUG_ERROR, "%a - Setting Nx on 0x%p returned %r\n", __func__, BaseAddress, Status));
         ASSERT_EFI_ERROR (Status);
       }
-    } else {
-      DEBUG ((DEBUG_ERROR, "%a - Memory Address was not found in Memory map! %lp %r\n", __func__, BaseAddress, Status));
-      ASSERT_EFI_ERROR (Status);
     }
+  } else {
+    DEBUG ((DEBUG_ERROR, "%a - Memory Address was not found in Memory map! %lp %r\n", __func__, BaseAddress, Status));
+    ASSERT_EFI_ERROR (Status);
   }
 }
 
@@ -536,7 +538,7 @@ RemoveNxProtection (
   @param[in] Length       Length of the range.
 **/
 VOID
-ApplyReadOnlyMemoryProtection (
+ApplyRoProtection (
   IN EFI_PHYSICAL_ADDRESS  BaseAddress,
   IN UINTN                 Length
   )
@@ -557,10 +559,10 @@ ApplyReadOnlyMemoryProtection (
         DEBUG ((DEBUG_ERROR, "%a - Setting Ro on 0x%p returned %r\n", __func__, BaseAddress, Status));
         ASSERT_EFI_ERROR (Status);
       }
-    } else {
-      DEBUG ((DEBUG_ERROR, "%a - Memory Address was not found in Memory map! %lp %r\n", __func__, BaseAddress, Status));
-      ASSERT_EFI_ERROR (Status);
     }
+  } else {
+    DEBUG ((DEBUG_ERROR, "%a - Memory Address was not found in Memory map! %lp %r\n", __func__, BaseAddress, Status));
+    ASSERT_EFI_ERROR (Status);
   }
 }
 
@@ -586,15 +588,7 @@ MpInitChangeApLoopCallback (
   CpuMpData->Pm16CodeSegment = GetProtectedMode16CS ();
   CpuMpData->ApLoopMode      = PcdGet8 (PcdCpuApLoopMode);
   mNumberToFinish            = CpuMpData->CpuCount - 1;
-  RemoveNxProtection (
-    (EFI_PHYSICAL_ADDRESS)(UINTN)mReservedApLoop.Data,
-    EFI_PAGES_TO_SIZE (EFI_SIZE_TO_PAGES (CpuMpData->AddressMap.RelocateApLoopFuncSizeAmdSev))
-    );
 
-  ApplyReadOnlyMemoryProtection (
-    (EFI_PHYSICAL_ADDRESS)(UINTN)mReservedApLoop.Data,
-    EFI_PAGES_TO_SIZE (EFI_SIZE_TO_PAGES (CpuMpData->AddressMap.RelocateApLoopFuncSizeAmdSev))
-    );
   WakeUpAP (CpuMpData, TRUE, 0, RelocateApLoop, NULL, TRUE);
   while (mNumberToFinish > 0) {
     CpuPause ();
@@ -679,7 +673,7 @@ InitMpGlobalData (
                       MemDesc.Attributes | EFI_MEMORY_RP
                       );
       ASSERT_EFI_ERROR (Status);
-      AppendCpuMpDebugProtocolEntry (StackBase, CpuMpData->CpuApStackSize, Index, FALSE);     // MU_CHANGE
+      AppendCpuMpDebugProtocolEntry (StackBase, CpuMpData->CpuApStackSize, Index, FALSE); // MU_CHANGE
       DEBUG ((
         DEBUG_INFO,
         "Stack Guard set at %lx [cpu%lu]!\n",
@@ -688,7 +682,7 @@ InitMpGlobalData (
         ));
     }
 
-    InstallCpuMpDebugProtocol ();     // MU_CHANGE
+    InstallCpuMpDebugProtocol (); // MU_CHANGE
   }
   // MU_CHANGE START: Add the Debug Protocol in the case that CpuStackGuard is not active
   else {
