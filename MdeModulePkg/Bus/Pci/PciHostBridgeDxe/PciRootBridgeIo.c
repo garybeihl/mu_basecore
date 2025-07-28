@@ -10,17 +10,11 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "PciHostBridge.h"
 #include "PciRootBridge.h"
 #include "PciHostResource.h"
-
-// MU_CHANGE - Allow platform to disallow unprotected DMA access when done before IOMMU install.
-#include <Library/ReportStatusCodeLib.h>
+#include <Library/IoMmuLib.h> // MU_CHANGE
 
 #define NO_MAPPING  (VOID *) (UINTN) -1
 
 #define RESOURCE_VALID(Resource)  ((Resource)->Base <= (Resource)->Limit)
-
-// MU_CHANGE - Allow platform to disallow unprotected DMA access when done before IOMMU install.
-#define PCI_DMA_ORDERING_ERROR_STATUS_TYPE  (EFI_ERROR_MAJOR | EFI_ERROR_CODE)
-#define PCI_DMA_ORDERING_ERROR_CODE         (EFI_IO_BUS_PCI | EFI_IOB_EC_NOT_CONFIGURED)
 
 //
 // Lookup table for increment values based on transfer widths
@@ -1333,7 +1327,6 @@ RootBridgeIoPciWrite (
   @retval EFI_UNSUPPORTED        The HostAddress cannot be mapped as a common buffer.
   @retval EFI_DEVICE_ERROR       The System hardware could not map the requested address.
   @retval EFI_OUT_OF_RESOURCES   The request could not be completed due to lack of resources.
-  @retval EFI_NOT_READY          Require IOMMU PCD has been set and request happens before IOMMU protocol install.    MU_CHANGE
 **/
 EFI_STATUS
 EFIAPI
@@ -1350,6 +1343,7 @@ RootBridgeIoMap (
   PCI_ROOT_BRIDGE_INSTANCE  *RootBridge;
   EFI_PHYSICAL_ADDRESS      PhysicalAddress;
   MAP_INFO                  *MapInfo;
+  EDKII_IOMMU_OPERATION     IoMmuOperation; // MU_CHANGE
 
   if ((HostAddress == NULL) || (NumberOfBytes == NULL) || (DeviceAddress == NULL) ||
       (Mapping == NULL))
@@ -1366,36 +1360,51 @@ RootBridgeIoMap (
 
   RootBridge = ROOT_BRIDGE_FROM_THIS (This);
 
-  // MU_CHANGE [BEGIN] - Allow platform to disallow unprotected DMA access when done before IOMMU install.
-  if (FeaturePcdGet (PcdRequireIommu) && (mIoMmu == NULL)) {
-    DEBUG ((DEBUG_ERROR, "%a - mIoMmuProtocol is NULL!\n", __func__));
-    ASSERT (mIoMmu != NULL);
-    ReportStatusCode (PCI_DMA_ORDERING_ERROR_STATUS_TYPE, PCI_DMA_ORDERING_ERROR_CODE);
-    return EFI_NOT_READY;
+  // MU_CHANGE [BEGIN] - Use IoMmuLib
+  // if (mIoMmu != NULL) {
+  //   if (!RootBridge->DmaAbove4G) {
+  //     //
+  //     // Clear 64bit support
+  //     //
+  //     if (Operation > EfiPciOperationBusMasterCommonBuffer) {
+  //       Operation = (EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_OPERATION)(Operation - EfiPciOperationBusMasterRead64);
+  //     }
+  IoMmuOperation = (EDKII_IOMMU_OPERATION)Operation;
+
+  if (!RootBridge->DmaAbove4G) {
+    //
+    // Clear 64bit support
+    //
+    if (Operation > EfiPciOperationBusMasterCommonBuffer) {
+      IoMmuOperation = (EDKII_IOMMU_OPERATION)(EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_OPERATION)(Operation - EfiPciOperationBusMasterRead64);
+    }
+  }
+
+  if (IoMmuIsPresent ()) {
+    Status = IoMmuMap (
+               (EDKII_IOMMU_OPERATION)IoMmuOperation,
+               HostAddress,
+               NumberOfBytes,
+               DeviceAddress,
+               Mapping
+               );
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "%a - IoMmuMap failed.\n", __func__));
+      ASSERT (FALSE);
+    }
+
+    // Status = mIoMmu->Map (
+    //                    mIoMmu,
+    //                    (EDKII_IOMMU_OPERATION)Operation,
+    //                    HostAddress,
+    //                    NumberOfBytes,
+    //                    DeviceAddress,
+    //                    Mapping
+    //                    );
+    return Status;
   }
 
   // MU_CHANGE [END]
-
-  if (mIoMmu != NULL) {
-    if (!RootBridge->DmaAbove4G) {
-      //
-      // Clear 64bit support
-      //
-      if (Operation > EfiPciOperationBusMasterCommonBuffer) {
-        Operation = (EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_OPERATION)(Operation - EfiPciOperationBusMasterRead64);
-      }
-    }
-
-    Status = mIoMmu->Map (
-                       mIoMmu,
-                       (EDKII_IOMMU_OPERATION)Operation,
-                       HostAddress,
-                       NumberOfBytes,
-                       DeviceAddress,
-                       Mapping
-                       );
-    return Status;
-  }
 
   PhysicalAddress = (EFI_PHYSICAL_ADDRESS)(UINTN)HostAddress;
   if ((!RootBridge->DmaAbove4G ||
@@ -1510,7 +1519,6 @@ RootBridgeIoMap (
   @retval EFI_SUCCESS            The range was unmapped.
   @retval EFI_INVALID_PARAMETER  Mapping is not a value that was returned by Map().
   @retval EFI_DEVICE_ERROR       The data was not committed to the target system memory.
-  @retval EFI_NOT_READY          Require IOMMU PCD has been set and request happens before IOMMU protocol install.    MU_CHANGE
 **/
 EFI_STATUS
 EFIAPI
@@ -1524,23 +1532,23 @@ RootBridgeIoUnmap (
   PCI_ROOT_BRIDGE_INSTANCE  *RootBridge;
   EFI_STATUS                Status;
 
-  // MU_CHANGE [BEGIN] - Allow platform to disallow unprotected DMA access when done before IOMMU install.
-  if (FeaturePcdGet (PcdRequireIommu) && (mIoMmu == NULL)) {
-    DEBUG ((DEBUG_ERROR, "%a - mIoMmuProtocol is NULL!\n", __func__));
-    ASSERT (mIoMmu != NULL);
-    ReportStatusCode (PCI_DMA_ORDERING_ERROR_STATUS_TYPE, PCI_DMA_ORDERING_ERROR_CODE);
-    return EFI_NOT_READY;
+  // MU_CHANGE [BEGIN] - Use IoMmuLib
+  // if (mIoMmu != NULL) {
+  //   Status = mIoMmu->Unmap (
+  //                      mIoMmu,
+  //                      Mapping
+  //                      );
+  if (IoMmuIsPresent ()) {
+    Status = IoMmuUnmap (Mapping);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "%a - IoMmuUnmap failed.\n", __func__));
+      ASSERT (FALSE);
+    }
+
+    return Status;
   }
 
   // MU_CHANGE [END]
-
-  if (mIoMmu != NULL) {
-    Status = mIoMmu->Unmap (
-                       mIoMmu,
-                       Mapping
-                       );
-    return Status;
-  }
 
   RootBridge = ROOT_BRIDGE_FROM_THIS (This);
 
@@ -1622,7 +1630,6 @@ RootBridgeIoUnmap (
                                  attribute bits are MEMORY_WRITE_COMBINE,
                                  MEMORY_CACHED, and DUAL_ADDRESS_CYCLE.
   @retval EFI_OUT_OF_RESOURCES   The memory pages could not be allocated.
-  @retval EFI_NOT_READY          Require IOMMU PCD has been set and request happens before IOMMU protocol install.    MU_CHANGE
 **/
 EFI_STATUS
 EFIAPI
@@ -1639,6 +1646,7 @@ RootBridgeIoAllocateBuffer (
   EFI_PHYSICAL_ADDRESS      PhysicalAddress;
   PCI_ROOT_BRIDGE_INSTANCE  *RootBridge;
   EFI_ALLOCATE_TYPE         AllocateType;
+  UINT64                    IoMmuAttributes; // MU_CHANGE
 
   //
   // Validate Attributes
@@ -1666,34 +1674,48 @@ RootBridgeIoAllocateBuffer (
 
   RootBridge = ROOT_BRIDGE_FROM_THIS (This);
 
-  // MU_CHANGE [BEGIN] - Allow platform to disallow unprotected DMA access when done before IOMMU install.
-  if (FeaturePcdGet (PcdRequireIommu) && (mIoMmu == NULL)) {
-    DEBUG ((DEBUG_ERROR, "%a - mIoMmuProtocol is NULL!\n", __func__));
-    ASSERT (mIoMmu != NULL);
-    ReportStatusCode (PCI_DMA_ORDERING_ERROR_STATUS_TYPE, PCI_DMA_ORDERING_ERROR_CODE);
-    return EFI_NOT_READY;
+  // MU_CHANGE [BEGIN] - Use IoMmuLib
+  // if (mIoMmu != NULL) {
+  //   if (!RootBridge->DmaAbove4G) {
+  //     //
+  //     // Clear DUAL_ADDRESS_CYCLE
+  //     //
+  //     Attributes &= ~((UINT64)EFI_PCI_ATTRIBUTE_DUAL_ADDRESS_CYCLE);
+
+  IoMmuAttributes = Attributes;
+
+  if (!RootBridge->DmaAbove4G) {
+    //
+    // Clear DUAL_ADDRESS_CYCLE
+    //
+    IoMmuAttributes &= ~((UINT64)EFI_PCI_ATTRIBUTE_DUAL_ADDRESS_CYCLE);
+  }
+
+  if (IoMmuIsPresent ()) {
+    Status = IoMmuAllocateBuffer (
+               Type,
+               MemoryType,
+               Pages,
+               HostAddress,
+               IoMmuAttributes
+               );
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "%a - IoMmuAllocateBuffer failed.\n", __func__));
+      ASSERT (FALSE);
+    }
+
+    // Status = mIoMmu->AllocateBuffer (
+    //                    mIoMmu,
+    //                    Type,
+    //                    MemoryType,
+    //                    Pages,
+    //                    HostAddress,
+    //                    Attributes
+    //                    );
+    return Status;
   }
 
   // MU_CHANGE [END]
-
-  if (mIoMmu != NULL) {
-    if (!RootBridge->DmaAbove4G) {
-      //
-      // Clear DUAL_ADDRESS_CYCLE
-      //
-      Attributes &= ~((UINT64)EFI_PCI_ATTRIBUTE_DUAL_ADDRESS_CYCLE);
-    }
-
-    Status = mIoMmu->AllocateBuffer (
-                       mIoMmu,
-                       Type,
-                       MemoryType,
-                       Pages,
-                       HostAddress,
-                       Attributes
-                       );
-    return Status;
-  }
 
   AllocateType = AllocateAnyPages;
   if (!RootBridge->DmaAbove4G ||
@@ -1732,7 +1754,6 @@ RootBridgeIoAllocateBuffer (
   @retval EFI_SUCCESS            The requested memory pages were freed.
   @retval EFI_INVALID_PARAMETER  The memory range specified by HostAddress and
                                  Pages was not allocated with AllocateBuffer().
-  @retval EFI_NOT_READY          Require IOMMU PCD has been set and request happens before IOMMU protocol install.    MU_CHANGE
 **/
 EFI_STATUS
 EFIAPI
@@ -1744,24 +1765,24 @@ RootBridgeIoFreeBuffer (
 {
   EFI_STATUS  Status;
 
-  // MU_CHANGE [BEGIN] - Allow platform to disallow unprotected DMA access when done before IOMMU install.
-  if (FeaturePcdGet (PcdRequireIommu) && (mIoMmu == NULL)) {
-    DEBUG ((DEBUG_ERROR, "%a - mIoMmuProtocol is NULL!\n", __func__));
-    ASSERT (mIoMmu != NULL);
-    ReportStatusCode (PCI_DMA_ORDERING_ERROR_STATUS_TYPE, PCI_DMA_ORDERING_ERROR_CODE);
-    return EFI_NOT_READY;
+  // MU_CHANGE [BEGIN] - Use IoMmuLib
+  // if (mIoMmu != NULL) {
+  //   Status = mIoMmu->FreeBuffer (
+  //                      mIoMmu,
+  //                      Pages,
+  //                      HostAddress
+  //                      );
+  if (IoMmuIsPresent ()) {
+    Status = IoMmuFreeBuffer (Pages, HostAddress);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_ERROR, "%a - IoMmuFreeBuffer failed.\n", __func__));
+      ASSERT (FALSE);
+    }
+
+    return Status;
   }
 
   // MU_CHANGE [END]
-
-  if (mIoMmu != NULL) {
-    Status = mIoMmu->FreeBuffer (
-                       mIoMmu,
-                       Pages,
-                       HostAddress
-                       );
-    return Status;
-  }
 
   return gBS->FreePages ((EFI_PHYSICAL_ADDRESS)(UINTN)HostAddress, Pages);
 }
