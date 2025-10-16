@@ -196,15 +196,14 @@ ScsiDiskDriverBindingSupported (
   return Status;
 }
 
-// MU_CHANGE Begin: Add function to check whether the disk is write protected
-
 /**
  Check whether the SCSI disk is write protected.
+
  @param[in]  ScsiDiskDevice         The SCSI disk device.
  @param[out] WriteProtectionEnabled A pointer to a Boolean that will be set to TRUE if the disk is write protected,
                                     FALSE otherwise.
+
  @retval EFI_SUCCESS                The operation completed successfully.
- @retval EFI_INVALID_PARAMETER      One of the input parameters was invalid.
  @retval other                      An error occurred while executing the SCSI command.
  */
 STATIC
@@ -219,7 +218,7 @@ IsWriteProtected (
   UINT8                            Cdb[6];
   UINT8                            DataBuffer[64];
 
-  if ((ScsiDiskDevice == NULL) || (WriteProtectionEnabled == NULL) || (ScsiDiskDevice->ScsiIo == NULL)) {
+  if ((ScsiDiskDevice == NULL) || (ScsiDiskDevice->ScsiIo == NULL) || (WriteProtectionEnabled == NULL)) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -251,11 +250,10 @@ IsWriteProtected (
 
   // Mode Sense 6 Byte Command returns the Write Protection status in the 3rd byte
   // Bit 7 of the 3rd byte indicates the Write Protection status
+  // See SCSI Block Commands - 3 section 6.3.1 and SCSI-2 Spec, 8.3.3.
   *WriteProtectionEnabled = (DataBuffer[2] & BIT7) != 0;
   return EFI_SUCCESS;
 }
-
-// MU_CHANGE End: Add function to check whether the disk is write protected
 
 /**
   Start this driver on ControllerHandle.
@@ -295,8 +293,7 @@ ScsiDiskDriverBindingStart (
   CHAR8                 VendorStr[VENDOR_IDENTIFICATION_LENGTH + 1];
   CHAR8                 ProductStr[PRODUCT_IDENTIFICATION_LENGTH + 1];
   CHAR16                DeviceStr[VENDOR_IDENTIFICATION_LENGTH + PRODUCT_IDENTIFICATION_LENGTH + 2];
-  // MU_CHANGE: Add variable to check whether the disk is write protected
-  BOOLEAN  WriteProtectionEnabled = FALSE;
+  BOOLEAN               WriteProtectionEnabled = FALSE;
 
   MustReadCapacity = TRUE;
 
@@ -360,7 +357,6 @@ ScsiDiskDriverBindingStart (
       break;
   }
 
-  // MU_CHANGE Begin: Check whether the disk is write protected and set the ReadOnly flag accordingly
   if (ScsiDiskDevice->DeviceType == EFI_SCSI_TYPE_DISK) {
     Status = IsWriteProtected (ScsiDiskDevice, &WriteProtectionEnabled);
     if (EFI_ERROR (Status)) {
@@ -371,8 +367,6 @@ ScsiDiskDriverBindingStart (
       ScsiDiskDevice->BlkIo.Media->ReadOnly = TRUE;
     }
   }
-
-  // MU_CHANGE End: Check whether the disk is write protected and set the ReadOnly flag accordingly
 
   //
   // The Sense Data Array's initial size is 6
