@@ -278,8 +278,30 @@ RestoreVolatileRegisters (
   {
     Tss = (IA32_TSS_DESCRIPTOR *)(VolatileRegisters->Gdtr.Base +
                                   VolatileRegisters->Tr);
-    if (Tss->Bits.P == 1) {
-      Tss->Bits.Type &= 0xD;  // 1101 - Clear busy bit just in case
+
+    if ((Tss->Bits.P == 1) && ((Tss->Bits.Type & BIT1) == 0)) {
+      // TR is used to enable a separate safe stack when a stack overflow occurs.
+      // When PEI starts up the APs, TR is non-zero and so each processor has its
+      // own GDT. TR is an offset into the GDT and so points to a different TSS entry
+      // in each AP.
+      // There is a small window in early DXE after MpInitLibInitialize() is called
+      // where:
+      // - TR is non-zero because it has been inherited from the PEI phase
+      // - TR is not restored to 0
+      // - The APs are all switched to using the BSP's GDT
+      // - SaveVolatileRegisters() is called from ApWakeupFunction() before the APs
+      //   go to sleep, which saves the non-zero TR value to CpuMpData->CpuData[].VolatileRegisters.Tr,
+      //   cause TR to point to the same TSS entry in the BSP's GDT
+      // - The next time the APs are woken up, RestoreVolatileRegisters() is called
+      //   from ApWakeupFunction() which would attempt to load the non-zero TR value into the actual
+      //   task register, which creates a race condition to a #GP fault because loading the task
+      //   register sets the busy bit in the TSS descriptor and a #GP fault occurs if the busy bit
+      //   is already set when loading the task register.
+      //
+      // To avoid this issue, the task register is only loaded if TR is non-zero and the
+      // TSS descriptor is valid and not busy. HW sets the busy bit and does not clear it. edk2 does
+      // not clear the busy bit, so the BSP's TSS descriptor will be marked busy forever and the APs
+      // will not load the task register until they have their own GDT/TSS set up.
       AsmWriteTr (VolatileRegisters->Tr);
     }
   }
@@ -2430,25 +2452,6 @@ MpInitLibInitialize (
       SetApState (&CpuMpData->CpuData[Index], CpuStateIdle);
     }
   }
-
-  // MU_CHANGE: START Prevent AP Deadlock
-  // After we have executed the APs for the first time, we need to set their TR back to 0 so they do not attempt
-  // to set it on the next wakeup. At this point, the APs are still sharing the GDT/TSS with the BSP. There is a
-  // race condition here where the APs might try to set the TR in quick succession, where the first one sets it
-  // causing the busy bit in the TSS to get set after the next AP has cleared the busy bit. When the second AP
-  // attempts to set the TR, it will GP fault because the busy bit is set. After MpInitLibInitialize() completes,
-  // the next AP wakeup will cause the AP to load its own GDT/TSS, so this contention cannot occur. However, in the
-  // wakeup to switch contexts, we must ensure the APs do not attempt to set the TR as it can fault before they are
-  // able to execute the function to switch GDT/TSS.
-  for (Index = 0; Index < CpuMpData->CpuCount; Index++) {
-    if (Index == CpuMpData->BspNumber) {
-      continue;
-    }
-
-    CpuMpData->CpuData[Index].VolatileRegisters.Tr = 0;
-  }
-
-  // MU_CHANGE: END Prevent AP Deadlock
 
   //
   // Dump the microcode revision for each core.
